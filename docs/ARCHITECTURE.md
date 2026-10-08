@@ -82,15 +82,21 @@ The target moves high-volume reads to the backend while keeping writes non-custo
 
 ## Source layout
 
+The codebase is divided into two main components:
+
 ```text
-backend/    Fastify read API
-contracts/  Soroban contracts
-db/         PostgreSQL migrations and seed tools
-frontend/   Next.js client
-indexer/    Soroban event ingestion
-oracle/     Data adapters, council, submitter, monitoring
-shared/     Shared TypeScript types and event constants
-infra/      Local and production service configuration
+frontend/               Next.js client (presentation, wallet interaction, transaction signing)
+backend/                Backend services and smart contracts
+  ├── api/              Fastify read API
+  ├── contracts/        Soroban smart contracts
+  ├── db/               PostgreSQL migrations and seed tools
+  ├── indexer/          Soroban event ingestion
+  ├── oracle/           Data adapters, council, submitter, monitoring
+  ├── shared/           Shared TypeScript types and event constants
+  ├── infra/            Local and production service configuration
+  ├── test/             Cross-package integration and smoke tests
+  ├── scripts/          Operational and deployment scripts
+  └── status-page/      Status page
 ```
 
 See [LOCAL_DEV.md](LOCAL_DEV.md) for local startup, [API.md](API.md) for endpoints, [INDEXER_RUNBOOK.md](INDEXER_RUNBOOK.md) for indexer operations, [ORACLE_RUNBOOK.md](ORACLE_RUNBOOK.md) for resolution operations, and [RUNBOOK_INDEX.md](RUNBOOK_INDEX.md) for the alert → runbook map.

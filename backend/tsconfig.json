@@ -1,22 +1,28 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
-    "lib": ["ES2022"],
-    "outDir": "dist",
-    "rootDir": ".",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "declaration": true,
+    "types": [
+      "node"
+    ],
+    "typeRoots": [
+      "./frontend/node_modules/@types"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
-    },
-    "types": ["vitest/globals"]
+      "vitest": [
+        "frontend/node_modules/vitest/dist/index.d.ts"
+      ]
+    }
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "api/src/**/*.ts",
+    "indexer/src/**/*.ts",
+    "test/**/*.ts"
+  ]
 }

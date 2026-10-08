@@ -1,34 +1,19 @@
 {
-  "name": "stellar-ipredict",
+  "name": "stellar-nintendo-crest",
   "version": "0.1.0",
   "private": true,
-  "workspaces": [
-    "backend",
-    "db",
-    "indexer",
-    "oracle",
-    "shared"
-  ],
   "scripts": {
-    "build": "npm run build --workspace=@ipredict/shared && npm run build --workspaces --if-present",
-    "typecheck": "npm run build --workspace=@ipredict/shared && npm run typecheck --workspaces --if-present",
-    "test": "npm run build --workspace=@ipredict/shared && npm run test --workspaces --if-present && npm run test:cross",
-    "test:cross": "vitest run",
-    "test:cross:watch": "vitest",
-    "smoke": "tsx test/smoke/run.ts",
-    "smoke:list": "tsx test/smoke/run.ts --list",
-    "lint": "npm run lint --workspaces --if-present && npm --prefix db run lint",
-    "audit": "npx audit-ci --config ./audit-ci.jsonc"
-  },
-  "overrides": {
-    "undici": "^6.28.1",
-    "vite": "^6.4.3"
-  },
-  "devDependencies": {
-    "vite": "^6.4.3",
-    "vitest": "^3.2.6",
-    "@stellar/stellar-sdk": "^16.2.0",
-    "tsx": "^4.19.0"
+    "build:frontend": "npm --prefix frontend run build",
+    "build:backend": "npm --prefix backend run build",
+    "build": "npm run build:frontend && npm run build:backend",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "npm --prefix backend/api run dev",
+    "test:frontend": "npm --prefix frontend run test",
+    "test:backend": "npm --prefix backend run test",
+    "test": "npm run test:frontend && npm run test:backend",
+    "lint:frontend": "npm --prefix frontend run lint",
+    "lint:backend": "npm --prefix backend run lint",
+    "lint": "npm run lint:frontend && npm run lint:backend"
   },
   "engines": {
     "node": ">=22"

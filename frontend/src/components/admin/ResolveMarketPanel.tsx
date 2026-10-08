@@ -112,7 +112,7 @@ export default function ResolveMarketPanel() {
         }));
       }
     },
-    [publicKey, signTransaction]
+    [publicKey, signTransaction, showToast]
   );
 
   if (loading) {

@@ -98,7 +98,7 @@ targets using the `http_2xx` module and keeps the metrics under
 
 ```yaml
 scrape_configs:
-  - job_name: 'stellar-ipredict-synthetic'
+  - job_name: 'stellar-nintendo-crest-synthetic'
     metrics_path: /probe
     params:
       module: [http_2xx]
@@ -125,11 +125,11 @@ scrape_configs:
 
 ```yaml
 groups:
-  - name: stellar-ipredict-synthetic
+  - name: stellar-nintendo-crest-synthetic
     rules:
       # Endpoint down for more than 2 minutes
       - alert: IPredictEndpointDown
-        expr: probe_success{job="stellar-ipredict-synthetic"} == 0
+        expr: probe_success{job="stellar-nintendo-crest-synthetic"} == 0
         for: 2m
         labels:
           severity: critical
@@ -138,7 +138,7 @@ groups:
 
       # Response time above 1s for more than 5 minutes
       - alert: IPredictHighLatency
-        expr: probe_duration_seconds{job="stellar-ipredict-synthetic"} > 1
+        expr: probe_duration_seconds{job="stellar-nintendo-crest-synthetic"} > 1
         for: 5m
         labels:
           severity: warning
@@ -157,10 +157,10 @@ groups:
 There is currently **no Grafana configuration** in `infra/`. When one is added,
 the key panels for this synthetic job are:
 
-- **Uptime %** — `100 * avg_over_time(probe_success{job="stellar-ipredict-synthetic"}[24h])`
+- **Uptime %** — `100 * avg_over_time(probe_success{job="stellar-nintendo-crest-synthetic"}[24h])`
 - **Response time** (p95 over the probe) —
-  `histogram_quantile(0.95, sum(rate(probe_http_duration_seconds_bucket{job="stellar-ipredict-synthetic"}[5m])) by (le, instance))`
-  or, without the HTTP module, `metric(probe_duration_seconds{job="stellar-ipredict-synthetic"})`.
+  `histogram_quantile(0.95, sum(rate(probe_http_duration_seconds_bucket{job="stellar-nintendo-crest-synthetic"}[5m])) by (le, instance))`
+  or, without the HTTP module, `metric(probe_duration_seconds{job="stellar-nintendo-crest-synthetic"})`.
 
 ## Running locally
 

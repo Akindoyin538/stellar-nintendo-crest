@@ -111,7 +111,7 @@ export default function BettingPanel({
       showToast(error, "error");
     }
     prevStageRef.current = stage;
-  }, [stage, error]);
+  }, [stage, error, amount, side, showToast, onSuccess]);
 
   const handleSetMax = () => {
     // Max = spendable balance (keeps the locked reserve + fee headroom intact),

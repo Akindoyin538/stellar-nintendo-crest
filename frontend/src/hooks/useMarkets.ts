@@ -89,13 +89,15 @@ export function useMarkets(
   // then refresh in the background (stale-while-revalidate).
   const cachedMarkets = useRef(cache.getStale<Market[]>("markets"));
   const [allMarkets, setAllMarkets] = useState<Market[]>(cachedMarkets.current ?? []);
+  const allMarketsRef = useRef(allMarkets);
+  allMarketsRef.current = allMarkets;
   const [data, setData] = useState<Market[]>([]);
   const [loading, setLoading] = useState(!cachedMarkets.current);
   const [error, setError] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   const fetchMarkets = useCallback(async (silent = false) => {
-    if (!silent && allMarkets.length === 0) setLoading(true);
+    if (!silent && allMarketsRef.current.length === 0) setLoading(true);
     setError(null);
     try {
       const markets = await getMarkets();

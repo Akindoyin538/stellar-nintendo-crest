@@ -30,11 +30,11 @@ SHELL := /usr/bin/env bash
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-# dev | staging | production. Selects infra/docker-compose.$(ENV).yml.
+# dev | staging | production. Selects backend/infra/docker-compose.$(ENV).yml.
 ENV ?= dev
 COMPOSE ?= docker compose
-COMPOSE_FILE ?= infra/docker-compose.$(ENV).yml
-MONITORING_FILE ?= infra/docker-compose.monitoring.yml
+COMPOSE_FILE ?= backend/infra/docker-compose.$(ENV).yml
+MONITORING_FILE ?= backend/infra/docker-compose.monitoring.yml
 DC := $(COMPOSE) -f $(COMPOSE_FILE)
 
 # Matches the fixed local credentials in infra/docker-compose.dev.yml. Export
@@ -81,17 +81,16 @@ help: ## List every target
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Setup
 
-install: ## Install dependencies for the workspaces, db, and frontend
-	$(NPM) install
-	cd db && $(NPM) install
+install: ## Install dependencies for backend and frontend
+	cd backend && $(NPM) install
 	cd frontend && $(NPM) install
 
 env: ## Create any missing .env files from their .env.example
 	@set -e; \
 	for pair in \
-		"backend/.env.example:backend/.env" \
-		"indexer/.env.example:indexer/.env" \
-		"oracle/.env.example:oracle/.env" \
+		"backend/api/.env.example:backend/api/.env" \
+		"backend/indexer/.env.example:backend/indexer/.env" \
+		"backend/oracle/.env.example:backend/oracle/.env" \
 		"frontend/.env.local.example:frontend/.env.local"; do \
 		src="$${pair%%:*}"; dst="$${pair##*:}"; \
 		if [ -f "$$dst" ]; then \
@@ -134,14 +133,14 @@ wait: ## Block until Postgres accepts connections
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Database
 
-migrate: ## Apply every pending migration in db/migrations
-	cd db && $(NPM) run migrate
+migrate: ## Apply every pending migration in backend/db/migrations
+	cd backend/db && $(NPM) run migrate
 
 migrate-down: ## Roll back the most recent migration
-	cd db && $(NPM) run migrate:down
+	cd backend/db && $(NPM) run migrate:down
 
 seed: ## Load local sample markets, bets, and leaderboard rows
-	cd db && $(NPM) run seed
+	cd backend/db && $(NPM) run seed
 
 db-shell: ## Open psql against the running dev database
 	$(DC) exec postgres psql -U ipredict -d ipredict
@@ -158,16 +157,16 @@ db-reset: ## Destroy the database volume, then recreate, migrate, and seed
 ##@ Development
 
 dev-backend: ## Run the API on the host
-	cd backend && $(NPM) run dev
+	cd backend/api && $(NPM) run dev
 
 dev-indexer: ## Run the indexer on the host
-	cd indexer && METRICS_PORT=$(INDEXER_METRICS_PORT) $(NPM) run dev
+	cd backend/indexer && METRICS_PORT=$(INDEXER_METRICS_PORT) $(NPM) run dev
 
 dev-oracle: ## Run the oracle aggregator on the host
-	cd oracle && $(NPM) run dev
+	cd backend/oracle && $(NPM) run dev
 
 dev-monitor: ## Run the read-only oracle monitor on the host
-	cd oracle && $(NPM) run dev:monitor
+	cd backend/oracle && $(NPM) run dev:monitor
 
 dev-frontend: ## Run the Next.js app
 	cd frontend && $(NPM) run dev
@@ -175,45 +174,52 @@ dev-frontend: ## Run the Next.js app
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Quality
 
-build: ## Build every workspace
-	$(NPM) run build
+build-frontend: ## Build frontend Next.js production bundle
+	cd frontend && $(NPM) run build
 
-typecheck: ## Typecheck every workspace
-	$(NPM) run typecheck
+build-backend: ## Build backend packages
+	cd backend && $(NPM) run build
 
-test: test-shared test-backend test-indexer test-oracle test-db test-cross ## Run every Node suite
+build: build-frontend build-backend ## Build both frontend and backend
+
+typecheck: ## Typecheck backend and frontend
+	cd backend && $(NPM) run typecheck
+
+test: test-frontend test-backend ## Run all test suites
+
+test-backend-all: test-shared test-backend test-indexer test-oracle test-db test-cross ## Run every backend Node suite
 
 test-shared: ## @ipredict/shared (node:test)
-	$(NPM) test --workspace=@ipredict/shared
+	cd backend && $(NPM) test --workspace=shared
 
 test-backend: ## Backend API suite
-	cd backend && $(NPM) test
+	cd backend/api && $(NPM) test
 
 test-indexer: ## Indexer suite
-	cd indexer && $(NPM) test
+	cd backend/indexer && $(NPM) test
 
 test-oracle: ## Oracle suite
-	cd oracle && $(NPM) test
+	cd backend/oracle && $(NPM) test
 
 test-db: ## Migration and seed suite (needs a running Postgres)
-	cd db && $(NPM) test
+	cd backend/db && $(NPM) test
 
 test-cross: ## Cross-package suite — spans backend + indexer (amount precision, smoke suite)
-	$(NPM) run test:cross
+	cd backend && $(NPM) run test:cross
 
 test-frontend: ## Frontend suite
 	cd frontend && $(NPM) test
 
 test-contracts: ## Soroban contract suite
-	cd contracts && cargo test --workspace
+	cd backend/contracts && cargo test --workspace
 
 smoke: ## Post-deployment smoke suite. BASE_URL=https://… make smoke
-	$(NPM) run smoke -- --base-url "$(BASE_URL)" $(SMOKE_ARGS)
+	cd backend && $(NPM) run smoke -- --base-url "$(BASE_URL)" $(SMOKE_ARGS)
 
 smoke-list: ## List the smoke suite's checks and which of them write state
-	$(NPM) run smoke:list
+	cd backend && $(NPM) run smoke:list
 
-verify: typecheck test ## Typecheck, then run every Node suite
+verify: typecheck test ## Typecheck, then run every suite
 
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Observability
@@ -263,18 +269,18 @@ secrets-check: ## Fail if any .env file is tracked by git, and list untracked on
 		echo "chmod 600 anything holding a signing key."; \
 	fi
 
-secrets-scaffold: ## Create infra/.env from infra/.env.example for the container stack
-	@if [ -f infra/.env ]; then \
-		echo "infra/.env already exists — not overwriting."; \
+secrets-scaffold: ## Create backend/infra/.env from backend/infra/.env.example for the container stack
+	@if [ -f backend/infra/.env ]; then \
+		echo "backend/infra/.env already exists — not overwriting."; \
 	else \
-		cp infra/.env.example infra/.env; chmod 600 infra/.env; \
-		echo "Created infra/.env (mode 600). Replace every CHANGE_ME value."; \
+		cp backend/infra/.env.example backend/infra/.env; chmod 600 backend/infra/.env; \
+		echo "Created backend/infra/.env (mode 600). Replace every CHANGE_ME value."; \
 	fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 ##@ Housekeeping
 
 clean: ## Remove build output and coverage reports
-	rm -rf shared/dist backend/dist indexer/dist oracle/dist frontend/.next
-	rm -rf backend/coverage indexer/coverage oracle/coverage frontend/coverage
+	rm -rf backend/shared/dist backend/api/dist backend/indexer/dist backend/oracle/dist frontend/.next
+	rm -rf backend/api/coverage backend/indexer/coverage backend/oracle/coverage frontend/coverage
 	@echo "Removed build output. node_modules left alone — use 'make install' to refresh."

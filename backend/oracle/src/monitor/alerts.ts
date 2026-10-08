@@ -28,7 +28,7 @@ export type AlertType =
  */
 const RUNBOOK_BASE =
   process.env["RUNBOOK_BASE_URL"] ??
-  "https://github.com/Akanimoh12/Stellar-iPredict/blob/main";
+  "https://github.com/Akanimoh12/stellar-nintendo-crest/blob/main";
 
 export const ALERT_RUNBOOK_URLS: Record<AlertType, string> = {
   "oracle.monitor.market_stuck": `${RUNBOOK_BASE}/oracle/docs/STUCK_MARKET_RUNBOOK.md`,

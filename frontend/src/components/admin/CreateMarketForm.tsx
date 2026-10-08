@@ -76,7 +76,7 @@ export default function CreateMarketForm() {
       setStage("failed");
       setError(err instanceof Error ? err.message : "Unknown error");
     }
-  }, [publicKey, question, imageUrl, category, effectiveDuration, signTransaction]);
+  }, [publicKey, question, imageUrl, category, effectiveDuration, signTransaction, showToast]);
 
   const isSubmitting = stage !== "idle" && stage !== "confirmed" && stage !== "failed";
 

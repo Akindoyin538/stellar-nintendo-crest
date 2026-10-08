@@ -250,8 +250,8 @@ ipredict-stellar/
 
 ```bash
 # Clone
-git clone https://github.com/Akanimoh12/Stellar-iPredict.git
-cd Stellar-iPredict
+git clone https://github.com/Akanimoh12/stellar-nintendo-crest.git
+cd stellar-nintendo-crest
 
 # Build smart contracts
 cd contracts

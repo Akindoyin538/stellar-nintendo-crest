@@ -11,7 +11,7 @@ const PRODUCT_LINKS = [
 
 const RESOURCE_LINKS = [
   { href: "https://soroban.stellar.org/docs", label: "Docs", external: true },
-  { href: "https://github.com/Akanimoh12/Stellar-iPredict.git", label: "GitHub", external: true },
+  { href: "https://github.com/Akanimoh12/stellar-nintendo-crest.git", label: "GitHub", external: true },
 ];
 
 const LEGAL_LINKS = [
