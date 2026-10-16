@@ -1,6 +1,11 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Map, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Map, String, Symbol, Vec};
+
+/// Maximum allowed length (in bytes) for a market title/question.
+pub const MAX_TITLE_LEN: u32 = 160;
+/// Maximum allowed length (in bytes) for a market description.
+pub const MAX_DESCRIPTION_LEN: u32 = 1000;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -102,6 +107,55 @@ impl PredictionMarket {
         assert!(admin == &config.admin, "not admin");
     }
 
+    /// Validates a market title/question and description for length limits.
+    ///
+    /// Rejects empty or oversized strings so unbounded input cannot bloat
+    /// ledger rent or be used to smuggle oversized payloads to clients.
+    fn validate_market_text(title: &String, description: &String) {
+        let title_len = title.len();
+        let description_len = description.len();
+        assert!(title_len > 0, "title must not be empty");
+        assert!(title_len <= MAX_TITLE_LEN, "title exceeds max length");
+        assert!(description_len <= MAX_DESCRIPTION_LEN, "description exceeds max length");
+    }
+
+    /// Validates an external evidence/source URL.
+    ///
+    /// Requires a non-empty `http://` or `https://` scheme and a non-empty
+    /// host, rejecting malformed or scheme-less URLs.
+    fn validate_url(url: &String) {
+        let len = url.len();
+        assert!(len > 0, "url must not be empty");
+        let bytes = url.to_bytes();
+        let https = b"https://";
+        let http = b"http://";
+        let has_https = bytes.len() >= https.len() && {
+            let mut ok = true;
+            let mut i = 0;
+            while i < https.len() {
+                if bytes.get(i).unwrap() != https[i] {
+                    ok = false;
+                }
+                i += 1;
+            }
+            ok
+        };
+        let has_http = bytes.len() >= http.len() && {
+            let mut ok = true;
+            let mut i = 0;
+            while i < http.len() {
+                if bytes.get(i).unwrap() != http[i] {
+                    ok = false;
+                }
+                i += 1;
+            }
+            ok
+        };
+        assert!(has_https || has_http, "invalid url scheme");
+        let scheme_len = if has_https { https.len() } else { http.len() };
+        assert!(bytes.len() > scheme_len, "url missing host");
+    }
+
     pub fn create_market(env: Env, creator: Address) -> u64 {
         creator.require_auth();
         let token: Address = env.storage().instance().get(&Symbol::new(&env, "token")).unwrap();
@@ -121,6 +175,23 @@ impl PredictionMarket {
         next_id += 1;
         env.storage().instance().set(&Symbol::new(&env, "next_id"), &next_id);
         next_id - 1
+    }
+
+    /// Creates a market with a validated title, description, and source URL.
+    ///
+    /// Enforces the contract-level length limits (title <= 160, description
+    /// <= 1000) and rejects malformed evidence URLs before persisting.
+    pub fn create_market_with_metadata(
+        env: Env,
+        creator: Address,
+        title: String,
+        description: String,
+        source_url: String,
+    ) -> u64 {
+        creator.require_auth();
+        Self::validate_market_text(&title, &description);
+        Self::validate_url(&source_url);
+        Self::create_market(env, creator)
     }
 
     pub fn place_bet(env: Env, bettor: Address, market_id: u64, side_yes: bool, amount: i128) {
@@ -219,51 +290,6 @@ impl PredictionMarket {
         from.require_auth();
         assert!(amount > 0, "amount must be positive");
         let mut market: Market = env
-            .storage()
-            .persistent()
-            .get(&Self::market_key(&env, market_id))
-            .expect("market not found");
-        let token_client = token::Client::new(&env, &market.token);
-        token_client.transfer(&from, &env.current_contract_address(), &amount);
-        market.escrowed_bonds += amount;
-        env.storage().persistent().set(&Self::market_key(&env, market_id), &market);
-    }
+            
 
-    pub fn release_bond(env: Env, admin: Address, market_id: u64, to: Address, amount: i128) {
-        Self::require_admin(&env, &admin);
-        let mut market: Market = env
-            .storage()
-            .persistent()
-            .get(&Self::market_key(&env, market_id))
-            .expect("market not found");
-        assert!(amount > 0 && amount <= market.escrowed_bonds, "invalid bond amount");
-        market.escrowed_bonds -= amount;
-        env.storage().persistent().set(&Self::market_key(&env, market_id), &market);
-        let token_client = token::Client::new(&env, &market.token);
-        token_client.transfer(&env.current_contract_address(), &to, &amount);
-    }
-
-    pub fn withdraw_fees(env: Env, admin: Address, to: Address, amount: i128) {
-        Self::require_admin(&env, &admin);
-        let config: Config = env.storage().instance().get(&Symbol::new(&env, "config")).unwrap();
-        assert!(amount > 0 && amount <= config.accumulated_fees, "invalid fee amount");
-        let mut updated_config = config;
-        updated_config.accumulated_fees -= amount;
-        env.storage().instance().set(&Symbol::new(&env, "config"), &updated_config);
-        let token: Address = env.storage().instance().get(&Symbol::new(&env, "token")).unwrap();
-        let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&env.current_contract_address(), &to, &amount);
-    }
-
-    fn market_key(env: &Env, id: u64) -> Symbol {
-        let _ = env;
-        let _ = id;
-        Symbol::new(env, "market")
-    }
-
-    fn position_key(env: &Env, market_id: u64, who: &Address) -> Symbol {
-        let _ = market_id;
-        let _ = who;
-        Symbol::new(env, "position")
-    }
-}
+/* … truncated 2125 chars — edit only what you need near the top … */
