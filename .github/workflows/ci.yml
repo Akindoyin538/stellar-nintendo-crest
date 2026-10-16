@@ -5,6 +5,10 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  schedule:
+    # Daily TLS certificate expiry check (06:00 UTC)
+    - cron: '0 6 * * *'
+  workflow_dispatch:
 
 jobs:
   # ── Job 1: Frontend lint, test, and build ──────────────────────────────────
@@ -77,3 +81,81 @@ jobs:
       - name: Run contract tests
         working-directory: contracts
         run: cargo test --workspace
+
+  # ── Job 3: TLS certificate expiry monitoring ───────────────────────────────
+  tls-expiry-check:
+    name: TLS certificate expiry check
+    runs-on: ubuntu-latest
+    # Run on the daily schedule and on manual dispatch only.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check certificate expiry for production endpoints
+        id: certcheck
+        env:
+          # Comma-separated list of production hostnames to monitor.
+          TLS_HOSTS: ${{ vars.TLS_HOSTS || 'api.ipredict.io,app.ipredict.io' }}
+          # Alert threshold in days (issue #107: alert when < 15 days remain).
+          TLS_MIN_DAYS: '15'
+        run: |
+          set -euo pipefail
+          now=$(date +%s)
+          min_days="${TLS_MIN_DAYS:-15}"
+          threshold=$(( min_days * 86400 ))
+          failed=0
+          report=""
+
+          IFS=',' read -ra hosts <<< "$TLS_HOSTS"
+          for host in "${hosts[@]}"; do
+            host="$(echo "$host" | xargs)"
+            [ -z "$host" ] && continue
+
+            echo "::group::Checking $host"
+            if ! end_date=$(echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null \
+                | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2); then
+              echo "::error::Could not retrieve certificate for $host"
+              report+="- ❌ $host: unable to retrieve certificate\n"
+              failed=1
+              echo "::endgroup::"
+              continue
+            fi
+
+            end_epoch=$(date -d "$end_date" +%s)
+            remaining=$(( end_epoch - now ))
+            days_left=$(( remaining / 86400 ))
+            echo "$host expires on $end_date ($days_left days remaining)"
+
+            if [ "$remaining" -le 0 ]; then
+              echo "::error::$host certificate has EXPIRED"
+              report+="- ❌ $host: certificate EXPIRED\n"
+              failed=1
+            elif [ "$remaining" -lt "$threshold" ]; then
+              echo "::warning::$host certificate expires in $days_left days (< ${min_days} days)"
+              report+="- ⚠️ $host: expires in $days_left days (< ${min_days} days)\n"
+              failed=1
+            else
+              report+="- ✅ $host: $days_left days remaining\n"
+            fi
+            echo "::endgroup::"
+          done
+
+          {
+            echo "## TLS certificate expiry report"
+            echo ""
+            echo -e "$report"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more certificates are expired or nearing expiry."
+            exit 1
+          fi
+
+      - name: Alert operations on failure
+        if: failure()
+        run: |
+          echo "::error::TLS certificate expiry check failed — automated renewal may have failed. Operations must be notified."
+          echo "### 🚨 TLS certificate alert" >> "$GITHUB_STEP_SUMMARY"
+          echo "One or more production certificates are expired or have < 15 days remaining. Automated renewal may have failed — investigate certbot immediately." >> "$GITHUB_STEP_SUMMARY"
