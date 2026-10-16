@@ -416,3 +416,8 @@ See [docs/USER-FEEDBACK.md](docs/USER-FEEDBACK.md) for the full feedback log.
 Built by **Akan** for the Stellar Build-a-10M-Startup challenge.
 
 - Stellar Admin Wallet: `GDHQ6TNWZ4V2JVCDWEUVW7YKFBXCOQZRRUCT27LAKES3PGOE6JSZMSMD`
+
+## Handsoff notes
+
+<!-- handsoff-issue-123 -->
+- #123: security: add slippage protection for user bets placed during rapid odds fluctuations
