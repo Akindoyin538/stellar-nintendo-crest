@@ -421,3 +421,6 @@ Built by **Akan** for the Stellar Build-a-10M-Startup challenge.
 
 <!-- handsoff-issue-123 -->
 - #123: security: add slippage protection for user bets placed during rapid odds fluctuations
+
+<!-- handsoff-issue-124 -->
+- #124: security: implement replay attack defenses on off-chain oracle signed payloads
