@@ -1,0 +1,46 @@
+groups:
+  - name: synthetic-probes
+    rules:
+      # Frontend synthetic probe: /health must return HTTP 200 on a 30s interval.
+      - alert: FrontendHealthProbeFailing
+        expr: probe_success{job="blackbox-frontend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: frontend
+        annotations:
+          summary: "Frontend /health synthetic probe is failing"
+          description: "Blackbox probe to {{ $labels.instance }} has not returned HTTP 200 for over 1 minute. End users may be unable to reach the frontend."
+
+      # Frontend response time must stay under 2.5s (acceptance criteria).
+      - alert: FrontendResponseTimeHigh
+        expr: probe_duration_seconds{job="blackbox-frontend"} > 2.5
+        for: 2m
+        labels:
+          severity: warning
+          component: frontend
+        annotations:
+          summary: "Frontend response time exceeds 2.5s"
+          description: "Synthetic probe to {{ $labels.instance }} is responding in {{ $value | humanizeDuration }} (> 2.5s) for over 2 minutes."
+
+      # Soroban RPC health from external vantage points.
+      - alert: SorobanRpcProbeFailing
+        expr: probe_success{job="blackbox-soroban-rpc"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: soroban-rpc
+        annotations:
+          summary: "Soroban RPC synthetic probe is failing"
+          description: "Blackbox probe to Soroban RPC endpoint {{ $labels.instance }} has not returned HTTP 200 for over 1 minute."
+
+      # Soroban RPC latency from external vantage points.
+      - alert: SorobanRpcLatencyHigh
+        expr: probe_duration_seconds{job="blackbox-soroban-rpc"} > 2.5
+        for: 2m
+        labels:
+          severity: warning
+          component: soroban-rpc
+        annotations:
+          summary: "Soroban RPC response latency is high"
+          description: "External probe to Soroban RPC {{ $labels.instance }} is responding in {{ $value | humanizeDuration }} (> 2.5s) for over 2 minutes."
