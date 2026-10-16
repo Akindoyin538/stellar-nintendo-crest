@@ -77,3 +77,77 @@ jobs:
       - name: Run contract tests
         working-directory: contracts
         run: cargo test --workspace
+
+  # ── Job 3: Soroban WASM build, optimize & size assertion ──────────────────
+  wasm-size-check:
+    name: Soroban WASM size check
+    runs-on: ubuntu-latest
+    env:
+      # Maximum allowed optimized contract size in bytes (64 KB).
+      MAX_WASM_SIZE: 65536
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache Cargo registry & build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            contracts/target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('contracts/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-wasm-
+
+      - name: Install Soroban CLI
+        run: cargo install --locked soroban-cli
+
+      - name: Build contracts (release, wasm32-unknown-unknown)
+        working-directory: contracts
+        run: cargo build --target wasm32-unknown-unknown --release
+
+      - name: Optimize WASM artifacts
+        working-directory: contracts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          wasm_files=(target/wasm32-unknown-unknown/release/*.wasm)
+          if [ ${#wasm_files[@]} -eq 0 ]; then
+            echo "::error::No WASM artifacts found to optimize"
+            exit 1
+          fi
+          for wasm in "${wasm_files[@]}"; do
+            echo "Optimizing $wasm"
+            soroban contract optimize --wasm "$wasm"
+          done
+
+      - name: Assert contract byte-size limits
+        working-directory: contracts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          wasm_files=(target/wasm32-unknown-unknown/release/*.optimized.wasm)
+          if [ ${#wasm_files[@]} -eq 0 ]; then
+            echo "::error::No optimized WASM artifacts found"
+            exit 1
+          fi
+          failed=0
+          for wasm in "${wasm_files[@]}"; do
+            size=$(stat -c%s "$wasm")
+            echo "$wasm: $size bytes (limit: $MAX_WASM_SIZE bytes)"
+            if [ "$size" -gt "$MAX_WASM_SIZE" ]; then
+              echo "::error file=$wasm::Contract size $size bytes exceeds limit of $MAX_WASM_SIZE bytes"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::One or more contracts exceed the configured WASM size threshold"
+            exit 1
+          fi
+          echo "All contracts are within the configured size threshold."
