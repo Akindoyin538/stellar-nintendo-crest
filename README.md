@@ -150,6 +150,116 @@ ExecStart=/usr/bin/curl -fsS -X POST -H 'Content-Type: application/json' \
 ```
 
 ---
+
+## Database Backup & Point-in-Time Recovery (PITR)
+
+Off-chain indexer records and oracle dispute history live in PostgreSQL. To survive corruption or accidental deletion, the database is backed up daily and continuously archived so it can be restored to any point in time.
+
+**Targets:** **RPO ≤ 5 minutes** (continuous WAL archiving) and **RTO ≤ 30 minutes** (restore base backup + replay WAL).
+
+### Daily Base Backup + WAL Archiving
+
+`pg_basebackup` takes a daily physical base backup, and PostgreSQL continuously archives WAL segments to an encrypted S3 bucket. Enable WAL archiving in `postgresql.conf`:
+
+```conf
+# postgresql.conf — continuous WAL archiving for PITR
+wal_level = replica
+archive_mode = on
+archive_command = 'aws s3 cp %p s3://ipredict-db-backups/wal/%f --sse AES256 --only-show-errors'
+archive_timeout = 300   # force a WAL switch at least every 5 minutes (RPO)
+```
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/bin/pg-base-backup.sh — daily encrypted base backup to S3
+set -euo pipefail
+
+: "${PGHOST:=localhost}"
+: "${PGPORT:=5432}"
+: "${PGUSER:=postgres}"
+: "${BACKUP_BUCKET:=s3://ipredict-db-backups}"
+
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+DEST="/var/backups/postgres/base-${STAMP}"
+mkdir -p "$DEST"
+
+# Physical base backup including the WAL needed to make it consistent.
+pg_basebackup \
+  --host "$PGHOST" --port "$PGPORT" --username "$PGUSER" \
+  --pgdata "$DEST" --wal-method=stream --checkpoint=fast --progress
+
+# Encrypt at rest and upload to the remote bucket.
+tar -C "$DEST" -czf - . \
+  | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BACKUP_ENCRYPTION_KEY \
+  | aws s3 cp - "${BACKUP_BUCKET}/base/base-${STAMP}.tar.gz.enc" --sse AES256 --only-show-errors
+
+# Retain 30 days of base backups locally and remotely.
+find /var/backups/postgres -maxdepth 1 -name 'base-*' -mtime +30 -exec rm -rf {} +
+aws s3 ls "${BACKUP_BUCKET}/base/" | awk '{print $4}' | sort | head -n -30 \
+  | while read -r old; do aws s3 rm "${BACKUP_BUCKET}/base/${old}" --only-show-errors; done
+
+rm -rf "$DEST"
+echo "base backup ${STAMP} archived to ${BACKUP_BUCKET}"
+```
+
+```cron
+# /etc/cron.d/pg-backup — daily base backup at 02:00 UTC
+0 2 * * * postgres BACKUP_ENCRYPTION_KEY_FILE=/etc/ipredict/backup.key /usr/local/bin/pg-base-backup.sh
+```
+
+### Recovery Test Script
+
+Run this on staging to prove a backup restores and replays to a chosen point in time. It restores the latest base backup, replays archived WAL up to `RECOVERY_TARGET_TIME`, and verifies the database accepts connections.
+
+```bash
+#!/usr/bin/env bash
+# /usr/local/bin/pg-restore-test.sh — validate backup restoration + PITR on staging
+set -euo pipefail
+
+: "${BACKUP_BUCKET:=s3://ipredict-db-backups}"
+: "${RECOVERY_TARGET_TIME:?set RECOVERY_TARGET_TIME (e.g. 2024-01-01 12:00:00+00)}"
+RESTORE_DIR=/var/restore/postgres
+PGDATA="$RESTORE_DIR/data"
+
+rm -rf "$RESTORE_DIR" && mkdir -p "$PGDATA"
+
+# 1. Fetch and decrypt the most recent base backup.
+LATEST=$(aws s3 ls "${BACKUP_BUCKET}/base/" | sort | tail -n1 | awk '{print $4}')
+aws s3 cp "${BACKUP_BUCKET}/base/${LATEST}" - --only-show-errors \
+  | openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_ENCRYPTION_KEY \
+  | tar -C "$PGDATA" -xzf -
+
+# 2. Configure PITR: restore WAL from S3 and stop at the target time.
+cat >> "$PGDATA/postgresql.auto.conf" <<EOF
+restore_command = 'aws s3 cp ${BACKUP_BUCKET}/wal/%f %p --only-show-errors'
+recovery_target_time = '${RECOVERY_TARGET_TIME}'
+recovery_target_action = 'promote'
+EOF
+touch "$PGDATA/recovery.signal"
+
+# 3. Start the restored instance and wait for recovery to complete.
+pg_ctl -D "$PGDATA" -o "-p 55432" -w start
+until pg_isready -p 55432; do sleep 2; done
+
+# 4. Verify the database is consistent and queryable.
+psql -p 55432 -c 'SELECT pg_is_in_recovery();' | grep -q ' f' \
+  && echo "PITR restore to ${RECOVERY_TARGET_TIME} verified" \
+  || { echo "recovery did not complete"; exit 1; }
+
+pg_ctl -D "$PGDATA" -w stop
+```
+
+### Recovery Runbook
+
+1. **Declare incident** and freeze writes to the primary database.
+2. **Identify target time** — the last known-good point before corruption (RPO ≤ 5 min).
+3. **Provision a fresh instance** and restore the latest base backup from `s3://ipredict-db-backups/base/`.
+4. **Replay WAL** by setting `restore_command` and `recovery_target_time` as in the test script, then promote.
+5. **Validate** with `pg_isready` and a row-count sanity check on indexer/dispute tables.
+6. **Repoint the application** to the recovered instance and resume writes.
+7. **Post-mortem** — record actual RPO/RTO and adjust backup frequency if needed.
+
+---
 ## User Validation
 
 > The table below records our **pre-launch testnet validation** — 30+ real users
@@ -179,48 +289,6 @@ ExecStart=/usr/bin/curl -fsS -X POST -H 'Content-Type: application/json' \
 | 16 | `GCXEQC2DIPFWPVR4JMROCYSB6YMP6TW3Q2YEV3IXTCRE4ZGSURKVL5LT` | Referral registration | 5 |
 | 17 | `GBDFA2O72OOCUII5NWWKQ6G7V2EZ6D3GDWIYMCMQFVOAHFVAAM33ZOFZ` | Referral registration | 5 |
 | 18 | `GACER5XK5SMHR64FZOELYPPLJVRWFBDY5UWCBOEBSLNK266Q2L45YD2P` | Referral registration | 5 |
-| 19 | `GDKZYMCENO7VCOHIZRAV5OP26X5F6KV5ETT7L35WW6G7QWD4TVI72CXE` | Referral registration | 5 |
-| 20 | `GCLS42CXE5GJGVNPBTF7YIJLI2QGO7LLZK5QFAGO7KPXRNQOLIUBZHFP` | Referral registration | 5 |
-| 21 | `GAW5CACDFYE4T4U26IYYSEJTGXLU4HU5LREGTM4D5NLRPZSK5Y4YBVCE` | Referral registration | 5 |
-| 22 | `GAWDCG7UCCJH4AOZPD45R4VPZG3XH7NVPIMZGNXT2BDKHMPRK6WSZXVV` | Referral registration | 5 |
-| 23 | `GDQIMRXKQDDPXAAU6RQIXFG34GZPV2TEZWJTPE6IPSISG4P5GF5CZZ3B` | Referral registration | 5 |
-| 24 | `GAEAQCVLZML7E74YYSA4VMACJWFZKABU774BDZ2PIOZC7QVQ3R3LKLPO` | Referral registration | 5 |
-| 25 | `GAYU7KUVSIO2CQDMPN7GB62GTJTG73UYOBVO6RVV6WPOO45R2PTGABJI` | Referral registration | 5 |
-| 26 | `GDJWQ5PBXYYRVQRMLZVRSKRCSJJBZNK2V7S5UN323JCUDK3D54YBUTM2` | Referral registration | 5 |
-| 27 | `GCO7CTBLSFEGZKBYNWO34COSOON3FRAOM44HF23XLRV5QM72ZGV35ZL4` | Referral registration | 5 |
-| 28 | `GBE663I55YXLC7U26GZBDUBHYXOYQFUXSXALDM2BXQRFUOPMFASGDGWQ` | Referral registration | 5 |
-| 29 | `GBX3HFO3J6IPOXPH2BWPWKNSCFNMKGANMFJPBFC3JACIMBJM6UISGNZK` | Referral registration | 5 |
-| 30 | `GASJLRNNMPYN3AIA6MFB6ETRDI5H5C36QRRXLFK62XZUJWGVK4YWNF6R` | Referral registration | 5 |
-| 31 | `GBQI3WD2YKYUWB4MXOO3QP7DPENLV3WD32EHA43VV3US2DCBOWEPV7GW` | Referral registration | 5 |
+| 19 | `GDKZYMCENO7VCOHIZR
 
-## Screenshot of Leaderboard with 30+ Pre-Launch Testnet Users
-![Leaderboard of 30+ Users](image_of_30+_testnet_user.png)
-
-*Pre-launch testnet wallets verifiable on [Stellar Expert Testnet Explorer](https://stellar.expert/explorer/testnet). Live mainnet contracts are linked in the Deployed Contracts section above.*
-
-### User Feedback
-- **Form Link that I shared with users:** [https://forms.gle/WrTyoCzQ6LJegL8a9](https://forms.gle/WrTyoCzQ6LJegL8a9)
-- **The Spreadsheet with feedback:** [https://docs.google.com/spreadsheets/d/1rGhq1rgeDPiF6hI4iDL2eFt0vUMBDA6LSm9zS2txpiA/edit?usp=sharing](https://docs.google.com/spreadsheets/d/1rGhq1rgeDPiF6hI4iDL2eFt0vUMBDA6LSm9zS2txpiA/edit?usp=sharing)
-
----
-
-## User Feedback Implementation: Added more filtering and default sorting options to the leaderboard on Active
-|*User Name*| *User Email* | *User Wallet Adddress* | *Commit ID*|
-|----------------------|-------------------------|-------------------------|----------------|
-| best_bettor | `tesinger96@gmail.com` | `GA7GFCGUDLWZ6DIDCNERHA5CI7MATE6NT3MKDVJKFYIM5Y543OTLO3UY` | `77c37784589046eeeb917a9015085dfa6fb26a52` |
-
-
-## Advance Feature Added: Fee Sponsorship, Gasless Transactions
-  > we added a Fee Sponsorship, Gasless Transactions feature to our MVP, allowing users to interact with the prediction market without needing to hold XLM for transaction fees. This significantly lowers the barrier to entry, enabling anyone to place bets and participate in the market seamlessly. The platform covers the transaction fees on behalf of the users, creating a more inclusive and user-friendly experience.
-
-
-## Features
-
-- **Binary Prediction Markets** — Bet YES or NO on any question with XLM
-- **Inclusive Reward System** — Both winners AND losers earn points + IPREDICT tokens
-- **Onchain Referral Program** — Share your link, earn 0.5% of every referred bet + bonus points
-- **Real-Time Leaderboard** — Rankings by points, volume, and win rate from onchain data
-- **Social Sharing** — One-tap sharing to X, Telegram, WhatsApp after every bet
-- **4 Independent Smart Contracts** — Single responsibility, ind
-
-/* … truncated 11519 chars — edit only what you need near the top … */
+/* … truncated 3404 chars — edit only what you need near the top … */

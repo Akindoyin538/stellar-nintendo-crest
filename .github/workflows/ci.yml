@@ -8,6 +8,8 @@ on:
   schedule:
     # Daily TLS certificate expiry check (06:00 UTC)
     - cron: '0 6 * * *'
+    # Daily PostgreSQL base backup + WAL archive (02:00 UTC)
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
@@ -159,3 +161,55 @@ jobs:
           echo "::error::TLS certificate expiry check failed — automated renewal may have failed. Operations must be notified."
           echo "### 🚨 TLS certificate alert" >> "$GITHUB_STEP_SUMMARY"
           echo "One or more production certificates are expired or have < 15 days remaining. Automated renewal may have failed — investigate certbot immediately." >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Job 4: PostgreSQL base backup + WAL archive (issue #108) ───────────────
+  db-backup:
+    name: PostgreSQL backup & PITR
+    runs-on: ubuntu-latest
+    # Run on the daily schedule and on manual dispatch only.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run encrypted base backup and WAL archive
+        env:
+          PGHOST: ${{ secrets.PGHOST }}
+          PGPORT: ${{ secrets.PGPORT || '5432' }}
+          PGUSER: ${{ secrets.PGUSER }}
+          PGPASSWORD: ${{ secrets.PGPASSWORD }}
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PGHOST:-}" ] || [ -z "${BACKUP_S3_BUCKET:-}" ]; then
+            echo "::warning::Backup secrets not configured; skipping scheduled backup."
+            exit 0
+          fi
+          bash scripts/db/backup.sh
+
+      - name: Verify backup restoration (PITR smoke test)
+        env:
+          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
+          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BACKUP_S3_BUCKET:-}" ]; then
+            echo "::warning::Backup secrets not configured; skipping restore verification."
+            exit 0
+          fi
+          bash scripts/db/restore-test.sh
+
+      - name: Alert operations on failure
+        if: failure()
+        run: |
+          echo "::error::Database backup or restore verification failed — investigate immediately."
+          echo "### 🚨 Database backup alert" >> "$GITHUB_STEP_SUMMARY"
+          echo "The daily PostgreSQL backup or PITR restore test failed. See docs/runbooks/database-recovery.md for the recovery runbook." >> "$GITHUB_STEP_SUMMARY"
