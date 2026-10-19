@@ -18,6 +18,9 @@ const PLATFORM_FEE_BPS: i128 = 150;
 const BPS_DENOM: i128 = 10_000;
 const NET_NUMERATOR: i128 = 9_800;
 
+const COUNCIL_THRESHOLD: u32 = 3;
+const COUNCIL_TIMELOCK_SECS: u64 = 86_400; // 24h
+
 const WIN_POINTS: u64 = 30;
 const LOSE_POINTS: u64 = 10;
 const WIN_TOKENS: i128 = 10_0000000;
@@ -72,6 +75,8 @@ pub enum DataKey {
     FeeRecipient(Address),
     HasReferrer(Address),
     RateWindow,            // packed u64: high32=window_start_hi, low32=count
+    CouncilVote(u64, Address), // market_id, voter -> outcome
+    CouncilTally(u64),         // market_id -> (yes_votes, no_votes)
 }
 
 // ── Config packed into one instance storage slot ───────────────────────────
@@ -599,6 +604,61 @@ impl PredictionMarketContract {
             .get::<DataKey, BetEntry>(&DataKey::Bet(market_id, user))
             .map(|e| e.gross)
             .unwrap_or(0)
+    }
+
+    // ── Council Voting ────────────────────────────────────────────────────
+
+    /// Record a council member's vote on a disputed market.
+    /// Emits ("council", "voted") after recording the vote, and
+    /// ("council", "threshold_reached") once the council threshold is met.
+    pub fn council_vote(
+        env: Env,
+        voter: Address,
+        market_id: u64,
+        outcome: bool,
+    ) -> Result<(), MarketError> {
+        voter.require_auth();
+        Self::require_admin_or_resolver(&env, &voter)?;
+
+        let market = Self::load_market(&env, market_id)?;
+        if market.cancelled { return Err(MarketError::MarketCancelled); }
+
+        // Record the vote (one vote per voter per market).
+        let vote_key = DataKey::CouncilVote(market_id, voter.clone());
+        if env.storage().persistent().has(&vote_key) {
+            return Err(MarketError::AlreadyClaimed);
+        }
+        env.storage().persistent().set(&vote_key, &outcome);
+        env.storage().persistent().extend_ttl(&vote_key, TTL_BUMP, TTL_HIGH);
+
+        // Update running tallies.
+        let tally_key = DataKey::CouncilTally(market_id);
+        let (mut yes_votes, mut no_votes): (u32, u32) = env.storage().persistent()
+            .get(&tally_key)
+            .unwrap_or((0, 0));
+        if outcome { yes_votes += 1; } else { no_votes += 1; }
+        env.storage().persistent().set(&tally_key, &(yes_votes, no_votes));
+        env.storage().persistent().extend_ttl(&tally_key, TTL_BUMP, TTL_HIGH);
+
+        let current_votes = yes_votes + no_votes;
+
+        // Emit granular vote event for off-chain indexers.
+        env.events().publish(
+            (Symbol::new(&env, "council"), Symbol::new(&env, "voted")),
+            (market_id, voter.clone(), outcome, current_votes),
+        );
+
+        // Check threshold.
+        if current_votes >= COUNCIL_THRESHOLD {
+            let winning_outcome = yes_votes >= no_votes;
+            let timelock_deadline = env.ledger().timestamp() + COUNCIL_TIMELOCK_SECS;
+            env.events().publish(
+                (Symbol::new(&env, "council"), Symbol::new(&env, "threshold_reached")),
+                (market_id, winning_outcome, timelock_deadline),
+            );
+        }
+
+        Ok(())
     }
 
     // ── Internal Helpers ──────────────────────────────────────────────────

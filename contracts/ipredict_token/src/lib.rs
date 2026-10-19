@@ -116,9 +116,13 @@ impl IPredictTokenContract {
         if from_balance < amount {
             return Err(TokenError::InsufficientBalance);
         }
-        env.storage().persistent().set(&DataKey::Balance(from), &(from_balance - amount));
+        env.storage().persistent().set(&DataKey::Balance(from.clone()), &(from_balance - amount));
         let supply: i128 = env.storage().instance().get(&DataKey::TotalSupply).unwrap_or(0);
         env.storage().instance().set(&DataKey::TotalSupply, &(supply - amount));
+        env.events().publish(
+            (String::from_str(&env, "token"), String::from_str(&env, "burned")),
+            (from, amount),
+        );
         Ok(())
     }
 
