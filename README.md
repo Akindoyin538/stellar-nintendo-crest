@@ -416,3 +416,8 @@ See [docs/USER-FEEDBACK.md](docs/USER-FEEDBACK.md) for the full feedback log.
 Built by **Akan** for the Stellar Build-a-10M-Startup challenge.
 
 - Stellar Admin Wallet: `GDHQ6TNWZ4V2JVCDWEUVW7YKFBXCOQZRRUCT27LAKES3PGOE6JSZMSMD`
+
+## Handsoff notes
+
+<!-- handsoff-issue-113 -->
+- #113: feat(monitoring): configure alert rules for stuck markets (>48h past expiry) and council inactivity
