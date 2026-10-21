@@ -291,4 +291,9 @@ pg_ctl -D "$PGDATA" -w stop
 | 18 | `GACER5XK5SMHR64FZOELYPPLJVRWFBDY5UWCBOEBSLNK266Q2L45YD2P` | Referral registration | 5 |
 | 19 | `GDKZYMCENO7VCOHIZR
 
-/* … truncated 3404 chars — edit only what you need near the top … */
+- Stellar Admin Wallet: `GDHQ6TNWZ4V2JVCDWEUVW7YKFBXCOQZRRUCT27LAKES3PGOE6JSZMSMD`
+
+## Handsoff notes
+
+<!-- handsoff-issue-113 -->
+- #113: feat(monitoring): configure alert rules for stuck markets (>48h past expiry) and council inactivity

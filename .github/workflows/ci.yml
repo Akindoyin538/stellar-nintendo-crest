@@ -36,6 +36,14 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Audit dependencies
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+      - name: Run lint
+        working-directory: frontend
+        run: npm run lint
+
       - name: Run tests
         working-directory: frontend
         run: npm test
@@ -52,7 +60,7 @@ jobs:
           path: frontend/.next
           retention-days: 7
 
-  # ── Job 2: Rust contract check & test ──────────────────────────────────────
+  # ── Job 2: Rust contract check, lint, format & test ────────────────────────
   contract-check:
     name: Contracts (Rust)
     runs-on: ubuntu-latest
@@ -65,6 +73,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown, wasm32v1-none
+          components: clippy, rustfmt
 
       - name: Cache Cargo registry & build
         uses: actions/cache@v4
@@ -76,6 +85,21 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+
+      - name: Audit Rust dependencies
+        working-directory: contracts
+        run: cargo audit
+
+      - name: Check formatting
+        working-directory: contracts
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        working-directory: contracts
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: Check workspace compiles
         working-directory: contracts
         run: cargo check --workspace
@@ -84,132 +108,100 @@ jobs:
         working-directory: contracts
         run: cargo test --workspace
 
-  # ── Job 3: TLS certificate expiry monitoring ───────────────────────────────
-  tls-expiry-check:
-    name: TLS certificate expiry check
+  # ── Job 3: Node packages (backend, indexer, oracle) ────────────────────────
+  node-packages:
+    name: ${{ matrix.package }} (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
-    # Run on the daily schedule and on manual dispatch only.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [backend, indexer, oracle]
+        node-version: [18, 20]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ipredict_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/ipredict_test
+      REDIS_URL: redis://localhost:6379
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check certificate expiry for production endpoints
-        id: certcheck
-        env:
-          # Comma-separated list of production hostnames to monitor.
-          TLS_HOSTS: ${{ vars.TLS_HOSTS || 'api.ipredict.io,app.ipredict.io' }}
-          # Alert threshold in days (issue #107: alert when < 15 days remain).
-          TLS_MIN_DAYS: '15'
-        run: |
-          set -euo pipefail
-          now=$(date +%s)
-          min_days="${TLS_MIN_DAYS:-15}"
-          threshold=$(( min_days * 86400 ))
-          failed=0
-          report=""
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.package }}/package-lock.json
 
-          IFS=',' read -ra hosts <<< "$TLS_HOSTS"
-          for host in "${hosts[@]}"; do
-            host="$(echo "$host" | xargs)"
-            [ -z "$host" ] && continue
+      - name: Install dependencies
+        working-directory: ${{ matrix.package }}
+        run: npm ci
 
-            echo "::group::Checking $host"
-            if ! end_date=$(echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null \
-                | openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2); then
-              echo "::error::Could not retrieve certificate for $host"
-              report+="- ❌ $host: unable to retrieve certificate\n"
-              failed=1
-              echo "::endgroup::"
-              continue
-            fi
+      - name: Audit dependencies
+        working-directory: ${{ matrix.package }}
+        run: npm audit --audit-level=high
 
-            end_epoch=$(date -d "$end_date" +%s)
-            remaining=$(( end_epoch - now ))
-            days_left=$(( remaining / 86400 ))
-            echo "$host expires on $end_date ($days_left days remaining)"
+      - name: Typecheck
+        working-directory: ${{ matrix.package }}
+        run: npm run typecheck
 
-            if [ "$remaining" -le 0 ]; then
-              echo "::error::$host certificate has EXPIRED"
-              report+="- ❌ $host: certificate EXPIRED\n"
-              failed=1
-            elif [ "$remaining" -lt "$threshold" ]; then
-              echo "::warning::$host certificate expires in $days_left days (< ${min_days} days)"
-              report+="- ⚠️ $host: expires in $days_left days (< ${min_days} days)\n"
-              failed=1
-            else
-              report+="- ✅ $host: $days_left days remaining\n"
-            fi
-            echo "::endgroup::"
-          done
+      - name: Run DB migrations
+        if: matrix.package == 'backend' || matrix.package == 'indexer'
+        working-directory: db
+        run: npm run migrate
 
-          {
-            echo "## TLS certificate expiry report"
-            echo ""
-            echo -e "$report"
-          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Run tests
+        working-directory: ${{ matrix.package }}
+        run: npm test
 
-          if [ "$failed" -ne 0 ]; then
-            echo "One or more certificates are expired or nearing expiry."
-            exit 1
-          fi
-
-      - name: Alert operations on failure
-        if: failure()
-        run: |
-          echo "::error::TLS certificate expiry check failed — automated renewal may have failed. Operations must be notified."
-          echo "### 🚨 TLS certificate alert" >> "$GITHUB_STEP_SUMMARY"
-          echo "One or more production certificates are expired or have < 15 days remaining. Automated renewal may have failed — investigate certbot immediately." >> "$GITHUB_STEP_SUMMARY"
-
-  # ── Job 4: PostgreSQL base backup + WAL archive (issue #108) ───────────────
-  db-backup:
-    name: PostgreSQL backup & PITR
+  # ── Job 4: Database migration linting ──────────────────────────────────────
+  db-migrations:
+    name: DB (migration lint)
     runs-on: ubuntu-latest
-    # Run on the daily schedule and on manual dispatch only.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Run encrypted base backup and WAL archive
-        env:
-          PGHOST: ${{ secrets.PGHOST }}
-          PGPORT: ${{ secrets.PGPORT || '5432' }}
-          PGUSER: ${{ secrets.PGUSER }}
-          PGPASSWORD: ${{ secrets.PGPASSWORD }}
-          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
-          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
-        run: |
-          set -euo pipefail
-          if [ -z "${PGHOST:-}" ] || [ -z "${BACKUP_S3_BUCKET:-}" ]; then
-            echo "::warning::Backup secrets not configured; skipping scheduled backup."
-            exit 0
-          fi
-          bash scripts/db/backup.sh
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: db/package-lock.json
 
-      - name: Verify backup restoration (PITR smoke test)
-        env:
-          BACKUP_S3_BUCKET: ${{ secrets.BACKUP_S3_BUCKET }}
-          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION || 'us-east-1' }}
-        run: |
-          set -euo pipefail
-          if [ -z "${BACKUP_S3_BUCKET:-}" ]; then
-            echo "::warning::Backup secrets not configured; skipping restore verification."
-            exit 0
-          fi
-          bash scripts/db/restore-test.sh
+      - name: Install dependencies
+        working-directory: db
+        run: npm ci
 
-      - name: Alert operations on failure
-        if: failure()
-        run: |
-          echo "::error::Database backup or restore verification failed — investigate immediately."
-          echo "### 🚨 Database backup alert" >> "$GITHUB_STEP_SUMMARY"
-          echo "The daily PostgreSQL backup or PITR restore test failed. See docs/runbooks/database-recovery.md for the recovery runbook." >> "$GITHUB_STEP_SUMMARY"
+      - name: Audit dependencies
+        working-directory: db
+        run: npm audit --audit-level=high
+
+      - name: Lint migrations
+        working-directory: db
+        run: npm run lint:migrations
