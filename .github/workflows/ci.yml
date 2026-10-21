@@ -5,6 +5,12 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main]
+  schedule:
+    # Daily TLS certificate expiry check (06:00 UTC)
+    - cron: '0 6 * * *'
+    # Daily PostgreSQL base backup + WAL archive (02:00 UTC)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
 
 jobs:
   # ── Job 1: Frontend lint, test, and build ──────────────────────────────────
