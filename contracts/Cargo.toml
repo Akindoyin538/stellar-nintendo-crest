@@ -10,6 +10,11 @@ members = [
 [workspace.dependencies]
 soroban-sdk = "26.0.1"
 
+[workspace.metadata.audit]
+# cargo-audit configuration for the workspace.
+# Fail CI on any known vulnerability of moderate severity or higher.
+severity-threshold = "moderate"
+
 [profile.release]
 opt-level = "z"
 overflow-checks = true

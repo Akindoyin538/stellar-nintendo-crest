@@ -1,46 +1,28 @@
 groups:
-  - name: synthetic-probes
+  - name: indexer.rules
     rules:
-      # Frontend synthetic probe: /health must return HTTP 200 on a 30s interval.
-      - alert: FrontendHealthProbeFailing
-        expr: probe_success{job="blackbox-frontend"} == 0
-        for: 1m
+      - alert: IndexerStalled
+        expr: indexer_lag_ledgers > 100
+        for: 3m
         labels:
           severity: critical
-          component: frontend
+          component: indexer
         annotations:
-          summary: "Frontend /health synthetic probe is failing"
-          description: "Blackbox probe to {{ $labels.instance }} has not returned HTTP 200 for over 1 minute. End users may be unable to reach the frontend."
+          summary: "Indexer is stalled (lag {{ $value }} ledgers > 100)"
+          description: "The indexer has been more than 100 ledgers behind the Stellar network head for over 3 minutes. Users will see delayed bets and stale market prices."
+          dashboard: "https://grafana.example.com/d/indexer-overview"
+          runbook: "https://github.com/example/repo/blob/main/docs/runbooks/indexer-stall.md"
 
-      # Frontend response time must stay under 2.5s (acceptance criteria).
-      - alert: FrontendResponseTimeHigh
-        expr: probe_duration_seconds{job="blackbox-frontend"} > 2.5
-        for: 2m
+  - name: rpc.rules
+    rules:
+      - alert: RPCHighErrorRate
+        expr: rate(rpc_errors_total[5m]) > 0.05
+        for: 5m
         labels:
-          severity: warning
-          component: frontend
+          severity: high
+          component: rpc
         annotations:
-          summary: "Frontend response time exceeds 2.5s"
-          description: "Synthetic probe to {{ $labels.instance }} is responding in {{ $value | humanizeDuration }} (> 2.5s) for over 2 minutes."
-
-      # Soroban RPC health from external vantage points.
-      - alert: SorobanRpcProbeFailing
-        expr: probe_success{job="blackbox-soroban-rpc"} == 0
-        for: 1m
-        labels:
-          severity: critical
-          component: soroban-rpc
-        annotations:
-          summary: "Soroban RPC synthetic probe is failing"
-          description: "Blackbox probe to Soroban RPC endpoint {{ $labels.instance }} has not returned HTTP 200 for over 1 minute."
-
-      # Soroban RPC latency from external vantage points.
-      - alert: SorobanRpcLatencyHigh
-        expr: probe_duration_seconds{job="blackbox-soroban-rpc"} > 2.5
-        for: 2m
-        labels:
-          severity: warning
-          component: soroban-rpc
-        annotations:
-          summary: "Soroban RPC response latency is high"
-          description: "External probe to Soroban RPC {{ $labels.instance }} is responding in {{ $value | humanizeDuration }} (> 2.5s) for over 2 minutes."
+          summary: "RPC node error rate is elevated ({{ $value | humanizePercentage }} errors/sec)"
+          description: "The RPC node is returning an elevated error rate over the last 5 minutes, which may cause failed transactions and stale data."
+          dashboard: "https://grafana.example.com/d/rpc-overview"
+          runbook: "https://github.com/example/repo/blob/main/docs/runbooks/rpc-failures.md"
